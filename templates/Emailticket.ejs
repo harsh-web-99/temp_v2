@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Ticket</title>
+    <style>
+        /* General styles */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4; /* Light background for light mode */
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #f9f9f9; /* Light background */
+            background-color: rgba(249, 249, 249, 0.95); /* Slightly transparent */
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid #ddd; /* Add border for better visibility */
+        }
+
+        .header {
+            text-align: center;
+            padding-bottom: 20px;
+        }
+
+        .header img {
+            max-width: 150px;
+        }
+
+        .event-name {
+            background-color: #007bff;
+            color: white;
+            text-align: center;
+            padding: 20px 0;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .qr-code-container {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .qr-code-container img {
+            max-width: 200px;
+            width: 100%;
+        }
+
+        .booking-id {
+            text-align: center;
+            font-size: 16px;
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        /* Responsive Table styles */
+        .details-container {
+            margin-top: 20px;
+        }
+
+        .details-container table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .details-container td, .details-container th {
+            padding: 10px;
+            border: 1px solid #ddd;
+            word-wrap: break-word;
+            text-align: left;
+        }
+
+        .details-container th {
+            background-color: #f1f1f1;
+            font-weight: bold;
+        }
+
+        .terms {
+            font-size: 14px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-top: 1px solid #ddd;
+        }
+
+        .follow-us {
+            text-align: center;
+            margin-top: 30px;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            font-size: 16px;
+        }
+
+        .follow-us img {
+            vertical-align: middle;
+            margin-left: 5px;
+            width: 20px;
+            height: 20px;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 12px;
+            color: white;
+        }
+
+        .footer a {
+            color: white;
+            text-decoration: none;
+        }
+
+        /* Media Queries for responsiveness */
+        @media (max-width: 768px) {
+            .event-name {
+                font-size: 20px;
+                padding: 15px 0;
+            }
+
+            .qr-code-container img {
+                max-width: 150px;
+            }
+
+            .details-container td {
+                font-size: 14px;
+                padding: 8px;
+            }
+
+            .terms {
+                font-size: 12px;
+            }
+
+            .follow-us {
+                font-size: 14px;
+            }
+
+            .booking-id {
+                font-size: 14px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .event-name {
+                font-size: 18px;
+                padding: 10px 0;
+            }
+
+            .details-container td {
+                font-size: 12px;
+                padding: 6px;
+            }
+
+            .terms {
+                font-size: 11px;
+            }
+
+            .follow-us {
+                font-size: 13px;
+            }
+
+            .booking-id {
+                font-size: 13px;
+            }
+        }
+
+        /* Dark mode adjustments */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #121212; /* Dark background for dark mode */
+            }
+
+            .container {
+                background-color: #1e1e1e; /* Darker background for container in dark mode */
+                border: 1px solid #444; /* Darker border */
+            }
+
+            .event-name {
+                background-color: #007bff; /* Keep bright for contrast */
+            }
+
+            .terms, .booking-id, .follow-us {
+                color: white; /* Ensure text is white in dark mode */
+            }
+
+            .details-container th {
+                background-color: #333; /* Dark background for table headers */
+                color: white; /* White text for visibility */
+            }
+
+            .details-container td {
+                color: #e0e0e0; /* Light text for table cells */
+            }
+
+            .footer {
+                color: white; /* Footer text */
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header section -->
+        <div class="header">
+            <img src="<%= logoUrl %>" alt="Eventing Club Logo" />
+        </div>
+
+        <!-- Event name section -->
+        <div class="event-name">
+            <%= eventName %>
+        </div>
+
+        <!-- QR Code and Booking ID -->
+        <div class="qr-code-container">
+            <img src="<%= qrCodeUrl %>" alt="QR Code" />
+            <div class="booking-id">Booking ID: <%= bookingId %></div>
+        </div>
+
+        <!-- Ticket Details in Table Format -->
+        <div class="details-container">
+            <table>
+                <tr>
+                    <th>Ticket Name</th>
+                    <td><%= ticketName %></td>
+                    <th>Ticket Quantity</th>
+                    <td><%= ticketQuantity %></td>
+                </tr>
+                <tr>
+                    <th>Event Date</th>
+                    <td><%= eventDate %></td>
+                    <th>Event Time</th>
+                    <td><%= eventTime %></td>
+                </tr>
+                <tr>
+                    <th>Venue</th>
+                    <td colspan="3"><%= venueName %></td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Ticket Description (shown only if it exists) -->
+        <% if (TicketDescription) { %>
+            <div class="terms">
+                <h4>Ticket Description</h4>
+                <p><%- TicketDescription.replace(/\n/g, '<br>') %></p>
+            </div>
+        <% } %>
+
+        <!-- Terms & Conditions -->
+        <div class="terms">
+            <h4>Terms & Conditions</h4>
+            <p>
+                1. Please ensure you carry a valid ID proof for entry.<br/>
+                2. Tickets once purchased are non-refundable, even in the event of rescheduling.<br/>
+                3. The management reserves the right to conduct security checks, including frisking.<br/>
+                4. Venue rules apply.
+            </p>
+        </div>
+
+        <!-- Follow Us Section -->
+        <div class="follow-us">
+            Follow Us 
+            <a href="https://www.instagram.com/eventingclub" target="_blank" style="color: white; text-decoration: none;">
+                <img src="https://img.icons8.com/fluency/48/000000/instagram-new.png" alt="Instagram Icon" />
+            </a>
+        
+            <div class="footer" style="margin-top: 10px; font-size: 12px;">
+                If you have any questions, feel free to contact us at 
+                <a href="mailto:support@eventingclub.in" style="color: white;">support@eventingclub.in</a>.
+            </div>
+        </div>
+        
+    </div>
+</body>
+</html>
