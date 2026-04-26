@@ -1490,7 +1490,7 @@ async function validateEventTicketCreation(data) {
           promoter_id: Joi.string().min(2).required(),
         })
       ),
-    Name: Joi.string().min(3).max(50).required(),
+    Name: Joi.string().min(1).max(50).required(),
     Description: Joi.string().min(3).max(10000),
     Price: Joi.number().min(0).required(),
     Quantity: Joi.number().integer().positive().required(),
@@ -2232,7 +2232,7 @@ async function validatePromocodeCreation(data) {
       .min(1)
       .optional(),
     PromoCodeName: Joi.string().min(6).max(12).required(),
-    TermsCondition: Joi.string().min(5).max(1024).required(),
+    TermsCondition: Joi.string().min(5).max(1024),
     PromocodeType: Joi.number()
       .valid(PromocodeUnit.Amount, PromocodeUnit.Percentage)
       .required(),
