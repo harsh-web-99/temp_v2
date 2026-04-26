@@ -183,12 +183,12 @@ const createBulkTicketForEvent = async (req, res) => {
           TicketType: TicketType.BulkTicket,
         };
         const qrCodeUrl = await generateQRCode(qrObj);
-        const pdfPath = path.join(pdfDir, `ticket_${i + index + 1}.pdf`);
+        const pdfPath = path.join(pdfDir, `${ticket.Booking_id}.pdf`);
         await generatePDFWithPuppeteer(
           { ...ticket, qrCodeUrl, logoUrl },
           pdfPath
         );
-        return { path: pdfPath, name: `ticket_${i + index + 1}.pdf` };
+        return { path: pdfPath, name: `${ticket.Booking_id}.pdf` };
       });
       pdfPromises.push(...batchPromises);
       await Promise.all(batchPromises);

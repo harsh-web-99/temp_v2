@@ -146,8 +146,50 @@ const BookEventTicketsByPromoter = async (req, res) => {
 
     const trimmedCustomerName = CustomerName.trim();
     const normalizedEmail = Email.trim().toLowerCase();
+    const trimmedPhoneNumber = PhoneNumber.trim();
     const TicketPrice = isEventTicketExists._doc.Price;
     const TotalBookingAmount = TicketPrice * TicketQuantity;
+
+    // Check if customer exists, if not create a new customer
+    let existingCustomer = await findOneCustomerDataService({
+      MobileNumber: trimmedPhoneNumber,
+    });
+
+    let customer_id;
+    if (!existingCustomer) {
+      // Create new customer if doesn't exist
+      const newCustomerData = {
+        _id: uuidv4(),
+        MobileNumber: trimmedPhoneNumber,
+        CustomerName: trimmedCustomerName,
+        Email: normalizedEmail,
+        CustomerAge: CustomerAge ? CustomerAge : null,
+        FilterationDateTime: getAsiaCalcuttaCurrentDateTimeinIsoFormat(),
+        createdAt: getCurrentDateTime(),
+        RegistrationType: CustomerType.WebsiteRegistration,
+      };
+      await registerCustomerService(newCustomerData);
+      customer_id = newCustomerData._id;
+    } else {
+      // Update existing customer if needed
+      let customerUpdated = false;
+      if (!existingCustomer.CustomerName && trimmedCustomerName) {
+        existingCustomer.CustomerName = trimmedCustomerName;
+        customerUpdated = true;
+      }
+      if (!existingCustomer.Email && normalizedEmail) {
+        existingCustomer.Email = normalizedEmail;
+        customerUpdated = true;
+      }
+      if (!existingCustomer.CustomerAge && CustomerAge) {
+        existingCustomer.CustomerAge = CustomerAge;
+        customerUpdated = true;
+      }
+      if (customerUpdated) {
+        await existingCustomer.save();
+      }
+      customer_id = existingCustomer._id;
+    }
 
     let TicketBooking_id;
     let eventBookingExists;
@@ -195,6 +237,7 @@ const BookEventTicketsByPromoter = async (req, res) => {
 
     const BookingObj = {
       _id: uuidv4(),
+      customer_id: customer_id,
       CustomerName: trimmedCustomerName,
       PhoneNumber,
       WhatsAppNumber:
@@ -1179,10 +1222,18 @@ const getPromoterLatestBookingsForSuperAdminOrganizer = async (req, res) => {
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (promoter_id) {
@@ -1528,10 +1579,18 @@ const downloadPromoterLatestBookingsForSuperAdminOrganizer = async (
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (promoter_id) {
@@ -1868,10 +1927,18 @@ const getOnlineLatestBookingsForSuperAdminOrganizer = async (req, res) => {
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (event_id) {
@@ -2225,10 +2292,18 @@ const downloadExcelOnlineLatestBookingsForSuperAdminOrganizer = async (
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (event_id) {
