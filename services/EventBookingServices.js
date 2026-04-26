@@ -450,13 +450,21 @@ const fetchAndFormatPromoterTransactionBookingData = async (req) => {
     status: BookingStatus.Booked,
   };
 
-  // If searchKeyword is provided, add search conditions for Booking ID and Customer Name
+  // If searchKeyword is provided, add search conditions for Booking ID, Customer Name, and Phone Number
   if (searchKeyword) {
     const searchRegex = new RegExp(`^${searchKeyword}`, "i");
-    bookingfilter.$or = [
+    const orConditions = [
       { Booking_id: searchRegex },
       { CustomerName: searchRegex },
     ];
+    
+    // Check if searchKeyword is a valid number for PhoneNumber search
+    const searchNumber = parseInt(searchKeyword);
+    if (!isNaN(searchNumber)) {
+      orConditions.push({ PhoneNumber: searchNumber });
+    }
+    
+    bookingfilter.$or = orConditions;
   }
 
   // Fetch promoter, event, and booking data concurrently using Promise.all

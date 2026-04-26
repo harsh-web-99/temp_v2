@@ -427,7 +427,7 @@ const getPromoterLatestBookings = async (req, res) => {
     console.log("Get Promoter Latest Bookings by PromoterId API Called");
     console.log("Req Body Parameters:-----> ", req.body);
 
-    const { promoter_id } = req.body;
+    const { promoter_id, searchkeyword } = req.body;
 
     // Validate request body
     const validationResponse = await validatePromoterLatestBookingsbyPromoterId(
@@ -441,6 +441,23 @@ const getPromoterLatestBookings = async (req, res) => {
       promoter_id,
       status: BookingStatus.Booked,
     };
+
+    // Add search filter for booking, customer name, and phone number
+    if (searchkeyword) {
+      const searchRegex = new RegExp(`^${searchkeyword}`, "i");
+      const orConditions = [
+        { Booking_id: searchRegex },
+        { CustomerName: searchRegex },
+      ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
+    }
 
     // Fetch promoter, event, and booking data concurrently
     const [promoter, bookingData] = await Promise.all([
@@ -2650,10 +2667,18 @@ const getAllLatestBookingsForSuperAdminOrganizer = async (req, res) => {
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (promoter_id) {
@@ -2971,10 +2996,18 @@ const downloadExcelAllLatestBookingsForSuperAdminOrganizer = async (
 
     if (searchkeyword) {
       const searchRegex = new RegExp(`^${searchkeyword}`, "i");
-      bookingfilter.$or = [
+      const orConditions = [
         { Booking_id: searchRegex },
         { CustomerName: searchRegex },
       ];
+      
+      // Check if searchkeyword is a valid number for PhoneNumber search
+      const searchNumber = parseInt(searchkeyword);
+      if (!isNaN(searchNumber)) {
+        orConditions.push({ PhoneNumber: searchNumber });
+      }
+      
+      bookingfilter.$or = orConditions;
     }
 
     if (promoter_id) {
