@@ -381,6 +381,12 @@ const cancelEventTicket = async (req, res) => {
 
     await CheckIn.deleteMany({ Booking_id: booking_id });
 
+    console.log(
+      currentBookingStatus == BookingStatus.Failed
+        ? `Booking ${booking_id} cancelled, no tickets returned (payment had failed, already returned)`
+        : `Booking ${booking_id} cancelled, returned ${TicketQuantity} ticket(s)`,
+    );
+
     sendCancelEventBookingNotification(PhoneNumber, EventName, booking_id);
 
     return sendResponse(res, 200, false, "Booking Cancelled successfully");

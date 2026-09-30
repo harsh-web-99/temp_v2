@@ -199,19 +199,25 @@ const releasePendingBookingTickets = async () => {
 
     await Promise.all(
       InProcessBookingData.map(async (bookingData) => {
-        console.log("Bookings Found for release");
-
         // Delete only if still InProcess, so a booking paid in the meantime is kept
         // and each booking's tickets are released exactly once
         const releasedBooking = await EventBookings.findOneAndDelete({
           _id: bookingData._doc._id,
           status: BookingStatus.InProcess,
         });
-        if (!releasedBooking) return;
+        if (!releasedBooking) {
+          console.log(
+            `Booking ${bookingData._doc.Booking_id} not released, it is no longer InProcess`
+          );
+          return;
+        }
 
         await EventTickets.updateOne(
           { _id: releasedBooking.EventTicket_id },
           { $inc: { BookedQuantity: -releasedBooking.TicketQuantity } }
+        );
+        console.log(
+          `Released unpaid booking ${releasedBooking.Booking_id}, returned ${releasedBooking.TicketQuantity} ticket(s)`
         );
 
         if (releasedBooking.Qr_image_path) {

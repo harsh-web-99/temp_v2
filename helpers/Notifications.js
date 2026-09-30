@@ -12,7 +12,11 @@ import {
 } from "./WhatsappFunctions.js";
 
 // WhatsApp is always sent. SMS is also sent unless SMS_ENABLED=false.
-const isSmsEnabled = () => process.env.SMS_ENABLED !== "false";
+const isSmsEnabled = () => {
+  if (process.env.SMS_ENABLED !== "false") return true;
+  console.log("SMS skipped because SMS_ENABLED=false");
+  return false;
+};
 
 // mobileNumber is the 10 digit number without country code
 

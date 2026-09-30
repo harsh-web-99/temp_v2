@@ -484,6 +484,9 @@ const BookEventTicketsByCustomer = async (req, res) => {
     session.endSession();
 
     if (isFreeBooking) {
+      console.log(
+        `Free booking ${TicketBooking_id} confirmed without PayU (${TicketQuantity} ticket(s))`,
+      );
       await sendBookingSmsMailtoUser(TicketBooking_id);
 
       const redirectUrl = `${WebisteBase_Url}/success?Booking_id=${BookingObj._id}&txnid=${Transaction_id}&amount=0&paymentmode=FREE`;
@@ -583,6 +586,9 @@ const paymentSuccess = async (req, res) => {
       Transaction_id: txnid,
     });
     if (!bookingData) {
+      console.error(
+        `PayU payment succeeded for ${txnid} but the booking was not found (likely released after 10 min) - customer was charged, needs manual check / refund`,
+      );
       return sendResponse(res, 400, true, "Booking Not Found");
     }
 
@@ -605,8 +611,18 @@ const paymentSuccess = async (req, res) => {
     );
 
     if (updatedBooking) {
+      console.log(
+        `Payment success: booking ${bookingData._doc.Booking_id} marked Booked (${txnid})`,
+      );
       await sendBookingSmsMailtoUser(bookingData._doc.Booking_id);
-    } else if (bookingData._doc.status !== BookingStatus.Booked) {
+    } else if (bookingData._doc.status === BookingStatus.Booked) {
+      console.log(
+        `Repeat PayU success callback ignored, booking ${bookingData._doc.Booking_id} already Booked (${txnid})`,
+      );
+    } else {
+      console.error(
+        `PayU payment succeeded for ${txnid} but booking ${bookingData._doc.Booking_id} has status ${bookingData._doc.status} - customer was charged, needs manual check / refund`,
+      );
       return redirectToFailurePage(
         res,
         txnid,
@@ -648,6 +664,7 @@ const paymentFailed = async (req, res) => {
       Transaction_id: txnid,
     });
     if (!bookingData) {
+      console.error(`PayU failure callback for ${txnid}: booking not found`);
       return sendResponse(res, 400, true, "Booking Not Found");
     }
 
@@ -664,6 +681,13 @@ const paymentFailed = async (req, res) => {
       await EventTickets.updateOne(
         { _id: updatedBooking.EventTicket_id },
         { $inc: { BookedQuantity: -updatedBooking.TicketQuantity } },
+      );
+      console.log(
+        `Payment failed: booking ${updatedBooking.Booking_id} marked Failed, released ${updatedBooking.TicketQuantity} ticket(s) (${txnid}, ${error})`,
+      );
+    } else {
+      console.log(
+        `Repeat PayU failure callback ignored, booking ${bookingData._doc.Booking_id} has status ${bookingData._doc.status} (${txnid})`,
       );
     }
 

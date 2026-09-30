@@ -20,6 +20,16 @@ const sendWhatsappTemplate = (
   bodyValues = [],
   buttonValues,
 ) => {
+  if (!process.env.INTERAKT_API_KEY) {
+    console.error(
+      `INTERAKT_API_KEY not set in .env, WhatsApp ${templateName} not sent`,
+    );
+    return;
+  }
+
+  // Only the last 4 digits are logged
+  const maskedNumber = `******${String(mobileNumber).slice(-4)}`;
+
   const options = {
     method: "POST",
     hostname: "api.interakt.ai",
@@ -41,7 +51,7 @@ const sendWhatsappTemplate = (
     res.on("end", function () {
       const body = Buffer.concat(chunks);
       console.log(
-        `Interakt WhatsApp ${templateName} response (${res.statusCode}):`,
+        `Interakt WhatsApp ${templateName} to ${maskedNumber} response (${res.statusCode}):`,
         body.toString(),
       );
     });
@@ -49,7 +59,7 @@ const sendWhatsappTemplate = (
 
   req.on("error", function (e) {
     console.error(
-      `Interakt WhatsApp ${templateName} request failed:`,
+      `Interakt WhatsApp ${templateName} to ${maskedNumber} request failed:`,
       e.message,
     );
   });
