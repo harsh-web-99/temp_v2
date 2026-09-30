@@ -73,7 +73,7 @@ import {
   findOneVenueDataService,
   getVenueDataService,
 } from "../../../services/VenueServices.js";
-import { sendCancelEventBookingSms } from "../../../helpers/SmsFunctions.js";
+import { sendCancelEventBookingNotification } from "../../../helpers/Notifications.js";
 import { getCheckInDataService } from "../../../services/CheckInServices.js";
 import { findOnePromocodeDataService } from "../../../services/PromocodeServices.js";
 import { findOneScannerUserDataService } from "../../../services/ScannerUserServices.js";
@@ -381,7 +381,7 @@ const cancelEventTicket = async (req, res) => {
 
     await CheckIn.deleteMany({ Booking_id: booking_id });
 
-    sendCancelEventBookingSms(`91${PhoneNumber}`, EventName, booking_id);
+    sendCancelEventBookingNotification(PhoneNumber, EventName, booking_id);
 
     return sendResponse(res, 200, false, "Booking Cancelled successfully");
   } catch (error) {

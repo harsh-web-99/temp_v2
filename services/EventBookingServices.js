@@ -22,7 +22,7 @@ import {
   SortEventDateTime,
 } from "./EventDateTimeServices.js";
 import { findOneVenueDataService } from "./VenueServices.js";
-import { sendBookingSms } from "../helpers/SmsFunctions.js";
+import { sendBookingNotification } from "../helpers/Notifications.js";
 import sendResponse from "../helpers/sendResponse.js";
 import { sendEventTicketToCustomerEmail } from "../helpers/mailer.js";
 import { ServerBase_Url } from "../config/index.js";
@@ -205,7 +205,15 @@ const sendBookingSmsMailtoUser = async (TicketBooking_id) => {
       return res.status(403).send("SmtpDetails Not Found in Database");
     }
 
-    sendBookingSms(`91${PhoneNumber}`, EventName, TicketBooking_id);
+    sendBookingNotification({
+      mobileNumber: PhoneNumber,
+      EventName,
+      EventDateTime: `${EventDate}, ${EventTime}`,
+      BookingId: TicketBooking_id,
+      TicketName: TicketData._doc.Name,
+      TicketQuantity,
+      TicketUrl,
+    });
   } catch (error) {
     console.log(error);
   }

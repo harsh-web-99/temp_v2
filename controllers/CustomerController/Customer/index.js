@@ -27,7 +27,7 @@ import {
 } from "../../../services/CustomerServices.js";
 import { generateOTP, logRequest } from "../../../helpers/commonFunctions.js";
 import { getAsiaCalcuttaCurrentDateTimeinIsoFormat } from "../../../helpers/DateTime.js";
-import { sendOtpSms } from "../../../helpers/SmsFunctions.js";
+import { sendOtpNotification } from "../../../helpers/Notifications.js";
 import { getEventBookingsDataService } from "../../../services/EventBookingServices.js";
 import {
   getEventByIdService,
@@ -93,7 +93,7 @@ const generateOtp = async (req, res) => {
 
     let responseObj = {};
 
-      sendOtpSms(`91${trimmedMobileNumber}`, OtpValue);
+      sendOtpNotification(trimmedMobileNumber, OtpValue);
       responseObj.customer_id = customerData._id;
       responseObj.customerExists = customerExists;
 
