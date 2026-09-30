@@ -351,8 +351,13 @@ const BookEventTicketsByCustomer = async (req, res) => {
     const ConvenienceFeeType = isEventExists._doc.ConvinienceFeeUnit;
     const ConvenienceFeeValue = isEventExists._doc.ConvinienceFeeValue;
 
+    // Zero price tickets are free: no convenience fee or GST
+    const isZeroPriceTicket = TotalTicketPrice == 0;
+
     let ConvenienceFee = 0;
-    if (ConvenienceFeeType == ConvinienceFeeUnit.Amount) {
+    if (isZeroPriceTicket) {
+      ConvenienceFee = 0;
+    } else if (ConvenienceFeeType == ConvinienceFeeUnit.Amount) {
       ConvenienceFee = ConvenienceFeeValue;
     } else if (ConvenienceFeeType == ConvinienceFeeUnit.Percentage) {
       ConvenienceFee =
@@ -365,6 +370,9 @@ const BookEventTicketsByCustomer = async (req, res) => {
       TicketPriceAfterPromocodeDiscountAmount +
       ConvenienceFee +
       ConvinenceFeeGstAmount;
+
+    // Nothing to pay, so the booking is confirmed without PayU
+    const isFreeBooking = TotalBookingAmount == 0;
 
     // Step 6: Generate a unique Booking ID
     let TicketBooking_id, eventBookingExists, bulkTicketExists;
@@ -439,7 +447,8 @@ const BookEventTicketsByCustomer = async (req, res) => {
       customer_StateIsoCode: customer_StateIsoCode || null,
       customer_City: customer_City || null,
       customer_CityIsoCode: customer_CityIsoCode || null,
-      status: BookingStatus.InProcess,
+      status: isFreeBooking ? BookingStatus.Booked : BookingStatus.InProcess,
+      ...(isFreeBooking && { mode: "FREE", net_amount_debit: "0" }),
     };
 
     // Step 10: Start the database transaction and save booking details
@@ -473,6 +482,24 @@ const BookEventTicketsByCustomer = async (req, res) => {
     // Commit the transaction
     await session.commitTransaction();
     session.endSession();
+
+    if (isFreeBooking) {
+      await sendBookingSmsMailtoUser(TicketBooking_id);
+
+      const redirectUrl = `${WebisteBase_Url}/success?Booking_id=${BookingObj._id}&txnid=${Transaction_id}&amount=0&paymentmode=FREE`;
+
+      return sendResponse(
+        res,
+        200,
+        false,
+        "Event Ticket Booked successfully",
+        encrypt({
+          isFreeBooking: true,
+          Booking_id: BookingObj._id,
+          redirectUrl,
+        }),
+      );
+    }
 
     const PaymentDataObj = await createPayment(TicketBooking_id);
 
