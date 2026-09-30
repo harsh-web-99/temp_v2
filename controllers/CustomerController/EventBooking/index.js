@@ -30,7 +30,6 @@ import {
 } from "../../../services/EventServices.js";
 import {
   findOneEventBookingsDataService,
-  updateBookingDataService,
   sendBookingSmsMailtoUser,
 } from "../../../services/EventBookingServices.js";
 import { findOneEventBulkTicketsDataService } from "../../../services/EventBulkTicketServices.js";
@@ -68,87 +67,133 @@ const generateHash = (
   return crypto.createHash("sha512").update(hashString).digest("hex");
 };
 
-const createPayment = async (Booking_id) => {
-  try {
-    if (!Booking_id) {
-      console.log("Booking Id not Found");
-    }
+const getPayuCredentials = () => {
+  const key =
+    isProduction == "true"
+      ? process.env.PAYU_LIVE_MERCHANT_KEY
+      : process.env.PAYU_TEST_MERCHANT_KEY;
+  const salt =
+    isProduction == "true"
+      ? process.env.PAYU_LIVE_MERCHANT_SALT
+      : process.env.PAYU_TEST_MERCHANT_SALT;
 
-    const BookingData = await findOneEventBookingsDataService({
-      Booking_id,
-      BookingSource: TicketBookingSource.Website,
-    });
-
-    if (!BookingData) {
-      console.log("No Booking Found");
-    }
-
-    const amount = BookingData._doc.TotalAmount;
-    const productinfo = `Event Ticket Booking`;
-    const firstname = BookingData._doc.CustomerName;
-    const email = BookingData._doc.Email;
-    const phone = BookingData._doc.PhoneNumber;
-    const txnid = BookingData._doc.Transaction_id;
-
-    const successUrl = `${ServerBase_Url}/webiste/bookticket/payment/success`;
-    const failureUrl = `${ServerBase_Url}/webiste/bookticket/payment/failed`;
-
-    if (
-      !amount ||
-      !productinfo ||
-      !firstname ||
-      !email ||
-      !phone ||
-      !successUrl ||
-      !failureUrl
-    ) {
-      console.log("All fields are required");
-    }
-
-    let key;
-    let salt;
-
-    if (isProduction == "true") {
-      key = process.env.PAYU_LIVE_MERCHANT_KEY;
-      salt = process.env.PAYU_LIVE_MERCHANT_SALT;
-    } else {
-      key = process.env.PAYU_TEST_MERCHANT_KEY;
-      salt = process.env.PAYU_TEST_MERCHANT_SALT;
-    }
-
-    if (!key || !salt) {
-      throw new Error("Payment configuration missing");
-    }
-
-    // Assuming generateHash is defined elsewhere
-    const hash = generateHash(
-      key,
-      txnid,
-      amount,
-      productinfo,
-      firstname,
-      email,
-      salt,
-    );
-
-    const paymentData = {
-      key,
-      txnid,
-      amount,
-      productinfo,
-      firstname,
-      email,
-      phone,
-      surl: successUrl,
-      furl: failureUrl,
-      hash,
-    };
-
-    return paymentData;
-  } catch (error) {
-    console.error("Error creating payment:", error.message);
+  if (!key || !salt) {
+    throw new Error("Payment configuration missing");
   }
+
+  return { key, salt };
 };
+
+// Verifies the reverse hash PayU posts to surl/furl, so a callback cannot be forged
+const isValidPayuResponseHash = (body) => {
+  const { key, salt } = getPayuCredentials();
+  const {
+    status = "",
+    txnid = "",
+    amount = "",
+    productinfo = "",
+    firstname = "",
+    email = "",
+    udf1 = "",
+    udf2 = "",
+    udf3 = "",
+    udf4 = "",
+    udf5 = "",
+    additionalCharges,
+    hash,
+  } = body;
+
+  if (!hash || body.key !== key) return false;
+
+  let hashString = `${salt}|${status}||||||${udf5}|${udf4}|${udf3}|${udf2}|${udf1}|${email}|${firstname}|${productinfo}|${amount}|${txnid}|${key}`;
+  if (additionalCharges) {
+    hashString = `${additionalCharges}|${hashString}`;
+  }
+
+  const expectedHash = crypto
+    .createHash("sha512")
+    .update(hashString)
+    .digest("hex");
+  const receivedHash = String(hash).toLowerCase();
+
+  return (
+    receivedHash.length === expectedHash.length &&
+    crypto.timingSafeEqual(Buffer.from(receivedHash), Buffer.from(expectedHash))
+  );
+};
+
+// Booking totals are not rounded (e.g. 1034.3646), so allow PayU to round to the nearest paisa either way
+const isSameAmount = (a, b) =>
+  Math.abs(parseFloat(a) - parseFloat(b)) < 0.011;
+
+const redirectToFailurePage = (res, txnid, error, error_Message) =>
+  res.redirect(
+    `${WebisteBase_Url}/failure?txnid=${encodeURIComponent(
+      txnid || "",
+    )}&error=${encodeURIComponent(error)}&error_Message=${encodeURIComponent(
+      error_Message,
+    )}`,
+  );
+
+// Throws if the booking or any required payment field is missing
+const createPayment = async (Booking_id) => {
+  if (!Booking_id) {
+    throw new Error("Booking Id not Found");
+  }
+
+  const BookingData = await findOneEventBookingsDataService({
+    Booking_id,
+    BookingSource: TicketBookingSource.Website,
+  });
+
+  if (!BookingData) {
+    throw new Error("No Booking Found");
+  }
+
+  const amount = BookingData._doc.TotalAmount;
+  const productinfo = `Event Ticket Booking`;
+  const firstname = BookingData._doc.CustomerName;
+  const email = BookingData._doc.Email;
+  const phone = BookingData._doc.PhoneNumber;
+  const txnid = BookingData._doc.Transaction_id;
+
+  const successUrl = `${ServerBase_Url}/webiste/bookticket/payment/success`;
+  const failureUrl = `${ServerBase_Url}/webiste/bookticket/payment/failed`;
+
+  if (!amount || !firstname || !email || !phone || !txnid) {
+    throw new Error("Booking is missing required payment fields");
+  }
+
+  const { key, salt } = getPayuCredentials();
+
+  const hash = generateHash(
+    key,
+    txnid,
+    amount,
+    productinfo,
+    firstname,
+    email,
+    salt,
+  );
+
+  return {
+    key,
+    txnid,
+    amount,
+    productinfo,
+    firstname,
+    email,
+    phone,
+    surl: successUrl,
+    furl: failureUrl,
+    hash,
+  };
+};
+
+// Payment data is returned by /bookTicket; this route never worked because
+// createPayment was called with the request object as the Booking_id.
+const createPaymentRoute = (req, res) =>
+  sendResponse(res, 410, true, "Payment data is returned by /bookTicket");
 
 const BookEventTicketsByCustomer = async (req, res) => {
   let session;
@@ -454,9 +499,7 @@ const BookEventTicketsByCustomer = async (req, res) => {
   }
 };
 
-const updateEventBookingPaymentDetails = async ({
-  txnid,
-  status,
+const getPaymentDetailsUpdate = ({
   mihpayid,
   addedon,
   payment_source,
@@ -467,46 +510,46 @@ const updateEventBookingPaymentDetails = async ({
   cardnum,
   error = null,
   error_Message = null,
-}) => {
-  const filterQuery = {
-    Transaction_id: txnid,
-  };
-
-  const updateQuery = {
-    mihpayid,
-    unmappedstatus: unmappedstatus,
-    mode,
-    bank_ref_num: bank_ref_num,
-    cardnum: cardnum,
-    addedon,
-    error,
-    error_Message,
-    payment_source,
-    net_amount_debit,
-    status,
-  };
-
-  await updateBookingDataService(filterQuery, updateQuery);
-};
+}) => ({
+  mihpayid,
+  unmappedstatus,
+  mode,
+  bank_ref_num,
+  cardnum,
+  addedon,
+  error,
+  error_Message,
+  payment_source,
+  net_amount_debit,
+});
 
 const paymentSuccess = async (req, res) => {
   try {
     console.log("Payment Succcess Api Called");
-    const {
-      txnid,
-      mihpayid,
-      unmappedstatus,
-      mode,
-      bank_ref_num,
-      cardnum,
-      status,
-      addedon,
-      payment_source,
-      net_amount_debit,
-    } = req.body;
+    const { txnid, mode, status, amount, net_amount_debit } = req.body;
 
     if (!txnid || !status) {
       return sendResponse(res, 400, true, "All fields are required");
+    }
+
+    if (!isValidPayuResponseHash(req.body)) {
+      console.error(`PayU hash mismatch on success callback for ${txnid}`);
+      return redirectToFailurePage(
+        res,
+        txnid,
+        "HASH_MISMATCH",
+        "Payment could not be verified",
+      );
+    }
+
+    if (status !== "success") {
+      console.error(`PayU success callback with status ${status} for ${txnid}`);
+      return redirectToFailurePage(
+        res,
+        txnid,
+        "PAYMENT_NOT_SUCCESSFUL",
+        "Payment was not successful",
+      );
     }
 
     const bookingData = await findOneEventBookingsDataService({
@@ -516,26 +559,34 @@ const paymentSuccess = async (req, res) => {
       return sendResponse(res, 400, true, "Booking Not Found");
     }
 
-    const TicketBooking_id = bookingData._doc.Booking_id;
+    if (!isSameAmount(amount, bookingData._doc.TotalAmount)) {
+      console.error(
+        `PayU amount ${amount} does not match booking amount ${bookingData._doc.TotalAmount} for ${txnid}`,
+      );
+      return redirectToFailurePage(
+        res,
+        txnid,
+        "AMOUNT_MISMATCH",
+        "Payment amount does not match the booking",
+      );
+    }
 
-    await updateEventBookingPaymentDetails({
-      txnid,
-      status: BookingStatus.Booked,
-      mihpayid,
-      addedon,
-      payment_source,
-      net_amount_debit,
-      unmappedstatus,
-      mode,
-      bank_ref_num,
-      cardnum,
-    });
+    // Only an InProcess booking moves to Booked, so repeated callbacks are ignored
+    const updatedBooking = await EventBookings.findOneAndUpdate(
+      { Transaction_id: txnid, status: BookingStatus.InProcess },
+      { ...getPaymentDetailsUpdate(req.body), status: BookingStatus.Booked },
+    );
 
-    await sendBookingSmsMailtoUser(TicketBooking_id);
-
-    // if (isProduction == "true") {
-    //   await sendBookingSmsMailtoUser(TicketBooking_id);
-    // }
+    if (updatedBooking) {
+      await sendBookingSmsMailtoUser(bookingData._doc.Booking_id);
+    } else if (bookingData._doc.status !== BookingStatus.Booked) {
+      return redirectToFailurePage(
+        res,
+        txnid,
+        "BOOKING_NOT_IN_PROCESS",
+        "Booking is no longer awaiting payment",
+      );
+    }
 
     return res.redirect(
       `${WebisteBase_Url}/success?Booking_id=${bookingData._id}&txnid=${txnid}&amount=${net_amount_debit}&paymentmode=${mode}`,
@@ -549,18 +600,21 @@ const paymentSuccess = async (req, res) => {
 const paymentFailed = async (req, res) => {
   try {
     console.log("Payment Failed Api Called");
-    const {
-      txnid,
-      error,
-      error_Message,
-      mihpayid,
-      addedon,
-      payment_source,
-      net_amount_debit,
-    } = req.body;
+    const { txnid, error, error_Message } = req.body;
 
     if (!txnid || !error) {
       return sendResponse(res, 400, true, "All fields are required");
+    }
+
+    // A forged failure callback would otherwise cancel a customer's booking
+    if (!isValidPayuResponseHash(req.body)) {
+      console.error(`PayU hash mismatch on failure callback for ${txnid}`);
+      return redirectToFailurePage(
+        res,
+        txnid,
+        "HASH_MISMATCH",
+        "Payment could not be verified",
+      );
     }
 
     const bookingData = await findOneEventBookingsDataService({
@@ -570,34 +624,21 @@ const paymentFailed = async (req, res) => {
       return sendResponse(res, 400, true, "Booking Not Found");
     }
 
-    await updateEventBookingPaymentDetails({
-      txnid,
-      status: BookingStatus.Failed,
-      mihpayid,
-      addedon,
-      payment_source,
-      net_amount_debit,
-      error,
-      error_Message,
-    });
+    // Only an InProcess booking moves to Failed, so tickets are released once
+    const updatedBooking = await EventBookings.findOneAndUpdate(
+      { Transaction_id: txnid, status: BookingStatus.InProcess },
+      {
+        ...getPaymentDetailsUpdate(req.body),
+        status: BookingStatus.Failed,
+      },
+    );
 
-    const TicketId = bookingData._doc.EventTicket_id;
-    const TicketQuantity = bookingData._doc.TicketQuantity;
-    const QrCodeimagePath = bookingData._doc.Qr_image_path;
-
-    const existingTicket = await EventTickets.findOne({
-      _id: TicketId,
-    });
-
-    if (!existingTicket) {
-      console.log("Ticket Not Found");
+    if (updatedBooking) {
+      await EventTickets.updateOne(
+        { _id: updatedBooking.EventTicket_id },
+        { $inc: { BookedQuantity: -updatedBooking.TicketQuantity } },
+      );
     }
-
-    const updatedBookedQuantity =
-      existingTicket.BookedQuantity - TicketQuantity;
-
-    existingTicket.BookedQuantity = updatedBookedQuantity;
-    await existingTicket.save();
 
     return res.redirect(
       `${WebisteBase_Url}/failure?Booking_id=${
@@ -614,7 +655,7 @@ const paymentFailed = async (req, res) => {
 
 export {
   BookEventTicketsByCustomer,
-  createPayment,
+  createPaymentRoute,
   paymentSuccess,
   paymentFailed,
 };

@@ -72,6 +72,12 @@ if (cluster.isMaster) {
     console.log(`Worker ${worker.process.pid} died, restarting...`);
     cluster.fork();
   });
+
+  // Cron jobs run once here in the master, not in every worker
+  connectToDatabase();
+  cron.schedule("0 */1 * * *", updateEventStatusToCompleted); // Runs every 1 hours
+  cron.schedule("*/10 * * * *", expirePromocodeStatus); // Runs every 10 minutes
+  cron.schedule("* * * * *", releasePendingBookingTickets); // Runs every minute
 } else {
   // Workers can share any TCP connection. In this case, it's an Express app.
 
@@ -147,9 +153,4 @@ if (cluster.isMaster) {
   app.listen(port, () => {
     console.log(`Worker ${process.pid} is listening on port ${port}`);
   });
-
-  // Cron jobs
-  cron.schedule("0 */1 * * *", updateEventStatusToCompleted); // Runs every 1 hours
-  cron.schedule("*/10 * * * *", expirePromocodeStatus); // Runs every 10 minutes
-  cron.schedule("* * * * *", releasePendingBookingTickets); // Runs every minute
 }
