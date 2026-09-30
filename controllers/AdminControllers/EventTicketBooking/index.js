@@ -352,13 +352,18 @@ const cancelEventTicket = async (req, res) => {
 
     const { EventName } = EventData;
 
+    // Read before TicketQuantity is zeroed below, so the tickets are returned.
+    // A Failed booking's tickets were already returned by the payment failure callback.
+    const TicketId = EventBookingData._doc.EventTicket_id;
+    const TicketQuantity =
+      currentBookingStatus == BookingStatus.Failed
+        ? 0
+        : EventBookingData._doc.TicketQuantity;
+
     EventBookingData.TotalAmount = 0;
     EventBookingData.TicketQuantity = 0;
     EventBookingData.status = BookingStatus.Cancelled;
     await EventBookingData.save();
-
-    const TicketId = EventBookingData._doc.EventTicket_id;
-    const TicketQuantity = EventBookingData._doc.TicketQuantity;
 
     const existingTicket = await EventTickets.findOne({
       _id: TicketId,
