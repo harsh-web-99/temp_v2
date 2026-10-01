@@ -221,15 +221,25 @@ const sendBookingSmsMailtoUser = async (TicketBooking_id) => {
 
 const getPaginatedEventBookingsData = async (filterQuery, limit, skip) => {
   try {
+    // Latest booking first; _id keeps the order fixed when times are equal
     return await EventBookings.find(filterQuery)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .skip(skip);
+      .sort({ FilterationBookingDateTime: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit);
   } catch (error) {
     console.error("Error in fetching paginated EventBookings Data:", error);
     throw error;
   }
 };
+
+// Same order as getPaginatedEventBookingsData, for lists fetched without pagination
+const sortBookingsByLatest = (bookings) =>
+  bookings.sort(
+    (a, b) =>
+      (new Date(b.FilterationBookingDateTime).getTime() || 0) -
+        (new Date(a.FilterationBookingDateTime).getTime() || 0) ||
+      String(b._id).localeCompare(String(a._id))
+  );
 
 const countEventBookings = async (filterQuery) => {
   try {
@@ -565,6 +575,7 @@ export {
   getEventBookingsDataService,
   updateBookingDataService,
   sendBookingSmsMailtoUser,
+  sortBookingsByLatest,
   getPaginatedEventBookingsData,
   countEventBookings,
   fetchAndFormatEventTransactionData,

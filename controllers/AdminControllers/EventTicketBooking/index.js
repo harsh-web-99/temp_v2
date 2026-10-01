@@ -56,6 +56,7 @@ import {
   findOneEventBookingsDataService,
   getEventBookingsDataService,
   sendBookingSmsMailtoUser,
+  sortBookingsByLatest,
   getPaginatedEventBookingsData,
   countEventBookings,
   fetchAndFormatEventTransactionData,
@@ -496,6 +497,8 @@ const getPromoterLatestBookings = async (req, res) => {
     let EventVenue = [];
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id } = booking;
@@ -590,7 +593,7 @@ const getPromoterLatestBookings = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     const EventNamesSet = new Set();
     EventNamesArray.forEach((EventNamesData) => {
@@ -1488,7 +1491,7 @@ const getPromoterLatestBookingsForSuperAdminOrganizer = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     if (event_id) {
       const filterQuery = {
@@ -1729,6 +1732,8 @@ const downloadPromoterLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventDateTime_id, EventTicket_id, event_id } = booking;
@@ -1841,7 +1846,7 @@ const downloadPromoterLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();
@@ -2195,7 +2200,7 @@ const getOnlineLatestBookingsForSuperAdminOrganizer = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     if (event_id) {
       const filterQuery = {
@@ -2435,6 +2440,8 @@ const downloadExcelOnlineLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id } = booking;
@@ -2562,7 +2569,7 @@ const downloadExcelOnlineLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();
@@ -3124,6 +3131,8 @@ const downloadExcelAllLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id, BookingSource } = booking;
@@ -3265,7 +3274,7 @@ const downloadExcelAllLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();
