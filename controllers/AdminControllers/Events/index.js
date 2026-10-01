@@ -148,6 +148,99 @@ const createEventDateMapWithFuturePreference = (eventDateTimeData, currentDateTi
 };
 
 // ============================================================================
+// Helpers shared by the event list APIs
+// ============================================================================
+
+// Search text is matched literally, so names like "Live (2026)" don't break the regex
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Builds the name / city / organizer / venue / promoter filters. All given
+// filters are combined, so e.g. name search and city work together.
+const buildEventListBaseQuery = async ({
+  eventNameSearchKeyword,
+  CityName,
+  organizer_id,
+  venue_id,
+  promoter_id,
+}) => {
+  const conditions = [];
+
+  if (eventNameSearchKeyword) {
+    conditions.push({
+      EventName: {
+        $regex: escapeRegex(eventNameSearchKeyword.trim()),
+        $options: "i",
+      },
+    });
+  }
+
+  if (CityName) {
+    const cityRegex = new RegExp(`^${escapeRegex(CityName.trim())}$`, "i");
+    const venuesInCity = await getVenueDataService({ City: cityRegex });
+    const venueIdsArray = venuesInCity.map((venue) => venue._id);
+    conditions.push({
+      $or: [
+        { venue_id: { $in: venueIdsArray } },
+        { VenueToBeAnnouncedCity: cityRegex },
+      ],
+    });
+  }
+
+  if (organizer_id) {
+    const organizerExists = await findOneOrganizerDataService({
+      _id: organizer_id,
+    });
+    if (!organizerExists) return { error: "Organizer Not Found" };
+    conditions.push({ "EventOrganizers.organizer_id": organizer_id });
+  }
+
+  if (venue_id) {
+    const venueExists = await findOneVenueDataService({ _id: venue_id });
+    if (!venueExists) return { error: "Venue Not Found" };
+    conditions.push({ venue_id });
+  }
+
+  if (promoter_id) {
+    const promoterExists = await findOnePromoterDataService({
+      _id: promoter_id,
+    });
+    if (!promoterExists) return { error: "Promoter Not Found" };
+    conditions.push({ "EventPromoter.promoter_id": promoter_id });
+  }
+
+  return { baseQuery: conditions.length ? { $and: conditions } : {} };
+};
+
+const getTimeOrZero = (date) => new Date(date).getTime() || 0;
+
+// Oldest created first, then by id, so events with the same date always keep the same order
+const compareEventsByCreation = (a, b) =>
+  getTimeOrZero(a.FilterationDateTime) - getTimeOrZero(b.FilterationDateTime) ||
+  String(a._id).localeCompare(String(b._id));
+
+// Upcoming events first, then past events, each by date. Ties are broken by
+// creation time and id, so every refresh and every page returns the same order.
+const sortEventsByBestDate = (events, eventDateMap) =>
+  events.sort((a, b) => {
+    const dateMapA = eventDateMap[a._id];
+    const dateMapB = eventDateMap[b._id];
+
+    const isAFuture = dateMapA ? dateMapA.isFuture : false;
+    const isBFuture = dateMapB ? dateMapB.isFuture : false;
+    if (isAFuture !== isBFuture) return isAFuture ? -1 : 1;
+
+    const dateA = dateMapA ? getTimeOrZero(dateMapA.date) : 0;
+    const dateB = dateMapB ? getTimeOrZero(dateMapB.date) : 0;
+
+    return dateA - dateB || compareEventsByCreation(a, b);
+  });
+
+// Lists without pagination: newest created first, then by id
+const sortEventsByNewestCreated = (events) =>
+  events.sort((a, b) => compareEventsByCreation(b, a));
+
+// ============================================================================
 const superAdminCreateEvent = async (req, res) => {
   try {
     const fieldsConfig = [
@@ -3011,57 +3104,12 @@ const getAllEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Build event query based on AdminRole
     const eventQueries = {
@@ -3082,7 +3130,7 @@ const getAllEvents = async (req, res) => {
               {
                 CreatedBy: AdminRole,
                 createduser_id: user_id,
-                status: EventStatus.Draft,
+                EventStatus: EventStatus.Draft,
               },
             ],
           },
@@ -3128,6 +3176,9 @@ const getAllEvents = async (req, res) => {
       return sendResponse(res, 404, true, "Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     // Filter events by date range if provided
@@ -3153,7 +3204,7 @@ const getAllEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -3162,7 +3213,7 @@ const getAllEvents = async (req, res) => {
       200,
       false,
       "Events fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching All Events Data:", error);
@@ -3205,57 +3256,12 @@ const getSuperAdminSelfCreatedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     const eventFiterQuery = {
       CreatedBy: AdminRole,
@@ -3269,9 +3275,10 @@ const getSuperAdminSelfCreatedEvents = async (req, res) => {
       return sendResponse(res, 404, true, "Super Admin Events not found");
     }
 
-    const updatedEventsDataArray = await getFormattedEventTableData(
-      SuperAdminEventsData
-    );
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(SuperAdminEventsData);
+
+    const updatedEventsDataArray = await getFormattedEventTableData(SuperAdminEventsData);
 
     // Filter events by date range if provided
     if (startDate && endDate) {
@@ -3296,7 +3303,7 @@ const getSuperAdminSelfCreatedEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -3305,7 +3312,7 @@ const getSuperAdminSelfCreatedEvents = async (req, res) => {
       200,
       false,
       "Super Admin Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching Super Admin Self Events Data:", error);
@@ -3355,57 +3362,12 @@ const getDraftEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Fetch events based on AdminRole
     const eventQueries = {
@@ -3452,6 +3414,9 @@ const getDraftEvents = async (req, res) => {
       return sendResponse(res, 404, true, " Draft Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     // Filter events by date range if provided
@@ -3477,7 +3442,7 @@ const getDraftEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -3486,7 +3451,7 @@ const getDraftEvents = async (req, res) => {
       200,
       false,
       "Draft Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching Draft Events Data:", error);
@@ -3536,57 +3501,12 @@ const getReviewEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Fetch events based on AdminRole
     const eventQueries = {
@@ -3634,6 +3554,9 @@ const getReviewEvents = async (req, res) => {
       return sendResponse(res, 404, true, " InReview Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     // Filter events by date range if provided
@@ -3659,7 +3582,7 @@ const getReviewEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -3668,7 +3591,7 @@ const getReviewEvents = async (req, res) => {
       200,
       false,
       "InReview Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching InReview Events Data:", error);
@@ -3719,57 +3642,12 @@ const getPublishEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Fetch events based on AdminRole
     const eventQueries = {
@@ -3826,6 +3704,9 @@ const getPublishEvents = async (req, res) => {
       return sendResponse(res, 404, true, " Published Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     // Filter events by date range if provided
@@ -3851,7 +3732,7 @@ const getPublishEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -3860,7 +3741,7 @@ const getPublishEvents = async (req, res) => {
       200,
       false,
       "Published Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching Published Events Data:", error);
@@ -3911,57 +3792,12 @@ const getCompletedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Fetch events based on AdminRole
     const eventQueries = {
@@ -4019,6 +3855,9 @@ const getCompletedEvents = async (req, res) => {
       return sendResponse(res, 404, true, " Completed Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     // Filter events by date range if provided
@@ -4044,7 +3883,7 @@ const getCompletedEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -4053,7 +3892,7 @@ const getCompletedEvents = async (req, res) => {
       200,
       false,
       "Completed Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching Completed Events Data:", error);
@@ -4104,57 +3943,12 @@ const getRejectedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     // Fetch events based on AdminRole
     const eventQueries = {
@@ -4213,6 +4007,9 @@ const getRejectedEvents = async (req, res) => {
       return sendResponse(res, 404, true, "Rejected Events not found");
     }
 
+    // Newest created first, same order on every call
+    sortEventsByNewestCreated(EventsData);
+
     const updatedEventsDataArray = await getFormattedEventTableData(EventsData);
 
     if (startDate && endDate) {
@@ -4237,7 +4034,7 @@ const getRejectedEvents = async (req, res) => {
         200,
         false,
         "All Events fetched successfully",
-        filteredEvents.reverse()
+        filteredEvents
       );
     }
 
@@ -4246,7 +4043,7 @@ const getRejectedEvents = async (req, res) => {
       200,
       false,
       "Rejected Event fetched successfully",
-      updatedEventsDataArray.reverse()
+      updatedEventsDataArray
     );
   } catch (error) {
     console.error("Error in fetching Rejected Events Data:", error);
@@ -4296,57 +4093,12 @@ const getAllPaginatedEvents = async (req, res) => {
       return sendResponse(res, 404, true, `${AdminRole} Not Found`);
     }
 
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -4380,7 +4132,7 @@ const getAllPaginatedEvents = async (req, res) => {
               {
                 CreatedBy: AdminRole,
                 createduser_id: user_id,
-                status: EventStatus.Draft,
+                EventStatus: EventStatus.Draft,
               },
             ],
           },
@@ -4443,23 +4195,7 @@ const getAllPaginatedEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
@@ -4520,57 +4256,12 @@ const getPaginatedSuperAdminSelfCreatedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -4615,23 +4306,7 @@ const getPaginatedSuperAdminSelfCreatedEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allSuperAdminEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allSuperAdminEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
@@ -4708,57 +4383,12 @@ const getPaginatedDraftEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -4836,23 +4466,7 @@ const getPaginatedDraftEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
@@ -4925,57 +4539,12 @@ const getPaginatedReviewEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -5054,23 +4623,7 @@ const getPaginatedReviewEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
@@ -5145,57 +4698,12 @@ const getPaginatedPublishEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -5279,96 +4787,23 @@ const getPaginatedPublishEvents = async (req, res) => {
     // Get current datetime first
     const currentDateTime = new Date(getAsiaCalcuttaCurrentDateTimeinIsoFormat());
 
-    // Create a map of event_id to the BEST EventStartDateTime
-    // If event has multiple dates, prefer future dates over past
-    const eventDateMap = {};
-    eventDateTimeData.forEach((dt) => {
-      const dtDate = new Date(dt.EventStartDateTime);
-      const isFuture = dtDate.getTime() >= currentDateTime.getTime();
+    // Create a map of event_id to the BEST EventStartDateTime (prefer future over past)
+    const eventDateMap = createEventDateMapWithFuturePreference(
+      eventDateTimeData,
+      currentDateTime
+    );
 
-      if (!eventDateMap[dt.Event_id]) {
-        eventDateMap[dt.Event_id] = {
-          date: dt.EventStartDateTime,
-          isFuture: isFuture
-        };
-      } else {
-        const existing = eventDateMap[dt.Event_id];
-        const existingDate = new Date(existing.date);
-
-        // Prefer future dates over past dates
-        if (isFuture && !existing.isFuture) {
-          // New date is future, existing is past → use new
-          eventDateMap[dt.Event_id] = {
-            date: dt.EventStartDateTime,
-            isFuture: isFuture
-          };
-        } else if (isFuture && existing.isFuture) {
-          // Both future → use earlier one
-          if (dtDate < existingDate) {
-            eventDateMap[dt.Event_id] = {
-              date: dt.EventStartDateTime,
-              isFuture: isFuture
-            };
-          }
-        } else if (!isFuture && !existing.isFuture) {
-          // Both past → use earlier one
-          if (dtDate < existingDate) {
-            eventDateMap[dt.Event_id] = {
-              date: dt.EventStartDateTime,
-              isFuture: isFuture
-            };
-          }
-        }
-        // else: new is past, existing is future → keep existing
-      }
-    });
-
-    console.log("🔍 DEBUG: Current DateTime:", currentDateTime.toISOString());
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
-
-    console.log("🔍 DEBUG: Sorted Events (first 10):");
-    sortedEvents.slice(0, 10).forEach((event, index) => {
-      const eventDateInfo = eventDateMap[event._id];
-      const dateStr = eventDateInfo ? eventDateInfo.date : "NO DATE";
-      const futureStr = eventDateInfo ? (eventDateInfo.isFuture ? "FUTURE" : "PAST") : "UNKNOWN";
-      console.log(`  ${index + 1}. [${futureStr}] ${event.EventName} | ${dateStr}`);
-    });
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
 
-    console.log("🔍 DEBUG: Paginated Events (after slice):");
-    paginatedEvents.forEach((event, index) => {
-      const eventDateInfo = eventDateMap[event._id];
-      const dateStr = eventDateInfo ? eventDateInfo.date : "NO DATE";
-      const futureStr = eventDateInfo ? (eventDateInfo.isFuture ? "FUTURE" : "PAST") : "UNKNOWN";
-      console.log(`  ${index + 1}. [${futureStr}] ${event.EventName} | ${dateStr}`);
-    });
 
     const updatedEventsDataArray = await getFormattedEventTableData(paginatedEvents, eventDateMap);
 
-    console.log("🔍 DEBUG: Formatted Events (response):");
-    updatedEventsDataArray.forEach((event, index) => {
-      console.log(`  ${index + 1}. ${event.EventName}`);
-    });
 
     return sendResponse(
       res,
@@ -5437,57 +4872,12 @@ const getPaginatedCompletedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -5576,23 +4966,7 @@ const getPaginatedCompletedEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: future events first (across all years), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAFuture = dateMapA ? dateMapA.isFuture : false;
-      const isBFuture = dateMapB ? dateMapB.isFuture : false;
-
-      // All future events first, then past events
-      if (isAFuture && !isBFuture) return -1;
-      if (!isAFuture && isBFuture) return 1;
-
-      // Within same group (future or past), sort chronologically ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
@@ -5666,57 +5040,12 @@ const getPaginatedRejectedEvents = async (req, res) => {
     }
 
     // Build the base query
-    let baseQuery = {};
-
-    if (eventNameSearchKeyword) {
-      baseQuery.EventName = { $regex: eventNameSearchKeyword, $options: "i" };
+    // Name / city / organizer / venue / promoter filters, combined together
+    const baseQueryResult = await buildEventListBaseQuery(req.body);
+    if (baseQueryResult.error) {
+      return sendResponse(res, 404, true, baseQueryResult.error);
     }
-
-    if (CityName) {
-      const venuesInCity = await getVenueDataService({
-        City: { $regex: new RegExp(`^${CityName}$`, "i") },
-      });
-
-      const venueIdsArray = venuesInCity.map((venue) => venue._id);
-      baseQuery = {
-        $or: [
-          { venue_id: { $in: venueIdsArray } },
-          {
-            VenueToBeAnnouncedCity: {
-              $regex: new RegExp(`^${CityName}$`, "i"),
-            },
-          },
-        ],
-      };
-    }
-
-    if (organizer_id) {
-      const organizerExists = await findOneOrganizerDataService({
-        _id: organizer_id,
-      });
-      if (!organizerExists) {
-        return sendResponse(res, 404, true, `Organizer Not Found`);
-      }
-      baseQuery["EventOrganizers.organizer_id"] = organizer_id;
-    }
-
-    if (venue_id) {
-      const venueExists = await findOneVenueDataService({ _id: venue_id });
-      if (!venueExists) {
-        return sendResponse(res, 404, true, `Venue Not Found`);
-      }
-      baseQuery.venue_id = venue_id;
-    }
-
-    if (promoter_id) {
-      const promoterExists = await findOnePromoterDataService({
-        _id: promoter_id,
-      });
-      if (!promoterExists) {
-        return sendResponse(res, 404, true, `Promoter Not Found`);
-      }
-      baseQuery["EventPromoter.promoter_id"] = promoter_id;
-    }
+    const { baseQuery } = baseQueryResult;
 
     if (startDate && endDate) {
       const EventDateTimeData = await getEventDateTimeDataService({
@@ -5806,23 +5135,7 @@ const getPaginatedRejectedEvents = async (req, res) => {
     const eventDateMap = createEventDateMapWithFuturePreference(eventDateTimeData, currentDateTime);
 
     // Sort events: upcoming first (EventStartDateTime >= current), then past events
-    const sortedEvents = allEvents.sort((a, b) => {
-      const dateMapA = eventDateMap[a._id];
-      const dateMapB = eventDateMap[b._id];
-      
-      const dateA = dateMapA ? new Date(dateMapA.date) : new Date(0);
-      const dateB = dateMapB ? new Date(dateMapB.date) : new Date(0);
-
-      const isAUpcoming = dateMapA ? dateMapA.isFuture : false;
-      const isBUpcoming = dateMapB ? dateMapB.isFuture : false;
-
-      // Upcoming events first
-      if (isAUpcoming && !isBUpcoming) return -1;
-      if (!isAUpcoming && isBUpcoming) return 1;
-
-      // Both upcoming or both past - sort by date ascending
-      return dateA.getTime() - dateB.getTime();
-    });
+    const sortedEvents = sortEventsByBestDate(allEvents, eventDateMap);
 
     // Apply pagination on sorted events
     const paginatedEvents = sortedEvents.slice(skip, skip + limit);
