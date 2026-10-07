@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const config = {
-  backendPort: 8000,
+  backendPort: 2000,
 };
 let ServerBase_Url;
 let AdminPanelBase_Url;

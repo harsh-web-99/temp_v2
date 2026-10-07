@@ -4,7 +4,7 @@ node_modules
 uploads
 info.txt
 scripts
-
+.env.prod
 
 /client/node_modules
 /.pnp
