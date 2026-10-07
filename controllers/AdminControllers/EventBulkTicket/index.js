@@ -18,7 +18,7 @@ import {
 } from "../../../services/EventBulkTicketServices.js";
 import { findOneSuperAdminDataService } from "../../../services/SuperAdminServices.js";
 import { findOneEventDataService } from "../../../services/EventServices.js";
-import { findOneEventBookingsDataService } from "../../../services/EventBookingServices.js";
+import { getEventBookingsDataService } from "../../../services/EventBookingServices.js";
 import { getCheckInDataService } from "../../../services/CheckInServices.js";
 import {
   getEventDateTimeDataService,
@@ -26,7 +26,7 @@ import {
 } from "../../../services/EventDateTimeServices.js";
 import { findOneVenueDataService } from "../../../services/VenueServices.js";
 import {
-  generatePDFWithPuppeteer,
+  generateBulkTicketPDFs,
   generateQRCode,
   zipFiles,
   sendEmailWithAttachment,
@@ -36,7 +36,33 @@ import path from "path";
 import fs from "fs";
 import { getAsiaCalcuttaCurrentDateTimeinIsoFormat } from "../../../helpers/DateTime.js";
 
+// Unique booking ids for a whole batch: checked against bookings and bulk
+// tickets with 2 queries per round instead of 2 queries per ticket
+const generateUniqueBookingIds = async (count) => {
+  const ids = new Set();
+  while (ids.size < count) {
+    const candidates = new Set();
+    while (candidates.size < count - ids.size) {
+      const id = generateRandomAlphaNumeric(6);
+      if (!ids.has(id)) candidates.add(id);
+    }
+    const candidateList = [...candidates];
+    const [existingBookings, existingBulkTickets] = await Promise.all([
+      getEventBookingsDataService({ Booking_id: { $in: candidateList } }),
+      getEventBulkTicketsDataService({ Booking_id: { $in: candidateList } }),
+    ]);
+    const taken = new Set(
+      [...existingBookings, ...existingBulkTickets].map((doc) => doc.Booking_id)
+    );
+    candidateList.forEach((id) => {
+      if (!taken.has(id)) ids.add(id);
+    });
+  }
+  return [...ids];
+};
+
 const createBulkTicketForEvent = async (req, res) => {
+  let batchDir;
   try {
     console.log("Create Event Bulk Ticket API Called");
     console.log("Request Body Parameters:", req.body);
@@ -124,19 +150,11 @@ const createBulkTicketForEvent = async (req, res) => {
       await findOneEventBulkTicketsDataService({ Batch_id: BulkTicketBatchId })
     );
 
+    const BookingIds = await generateUniqueBookingIds(Quantity);
+
     const bulkTicketArray = [];
     for (let i = 0; i < Quantity; i++) {
-      let Booking_id;
-      let eventBookingExists;
-      let bulkTicketExists;
-      do {
-        Booking_id = generateRandomAlphaNumeric(6);
-
-        [eventBookingExists, bulkTicketExists] = await Promise.all([
-          findOneEventBookingsDataService({ Booking_id: Booking_id }),
-          findOneEventBulkTicketsDataService({ Booking_id: Booking_id }),
-        ]);
-      } while (eventBookingExists || bulkTicketExists);
+      const Booking_id = BookingIds[i];
 
       const bulkTicketObj = {
         _id: uuidv4(),
@@ -165,37 +183,25 @@ const createBulkTicketForEvent = async (req, res) => {
 
     await createEventBulkTicketsService(bulkTicketArray);
 
-    const pdfDir = path.join(process.cwd(), "pdfs");
-    if (!fs.existsSync(pdfDir)) {
-      fs.mkdirSync(pdfDir);
-    }
-
-    const BATCH_SIZE = 10;
-    const pdfPromises = [];
+    // Own folder per batch, so two bulk bookings at the same time can't mix files
+    batchDir = path.join(process.cwd(), "pdfs", BulkTicketBatchId);
+    fs.mkdirSync(batchDir, { recursive: true });
 
     const logoUrl = ImagesUrls.EventingClubLogo;
 
-    for (let i = 0; i < bulkTicketArray.length; i += BATCH_SIZE) {
-      const batch = bulkTicketArray.slice(i, i + BATCH_SIZE);
-      const batchPromises = batch.map(async (ticket, index) => {
-        const qrObj = {
+    const ticketsWithQrCode = await Promise.all(
+      bulkTicketArray.map(async (ticket) => ({
+        ...ticket,
+        qrCodeUrl: await generateQRCode({
           Booking_id: ticket.Booking_id,
           TicketType: TicketType.BulkTicket,
-        };
-        const qrCodeUrl = await generateQRCode(qrObj);
-        const pdfPath = path.join(pdfDir, `${ticket.Booking_id}.pdf`);
-        await generatePDFWithPuppeteer(
-          { ...ticket, qrCodeUrl, logoUrl },
-          pdfPath
-        );
-        return { path: pdfPath, name: `${ticket.Booking_id}.pdf` };
-      });
-      pdfPromises.push(...batchPromises);
-      await Promise.all(batchPromises);
-    }
+        }),
+        logoUrl,
+      }))
+    );
 
-    const pdfFiles = await Promise.all(pdfPromises);
-    const zipFilePath = path.join(pdfDir, "tickets.zip");
+    const pdfFiles = await generateBulkTicketPDFs(ticketsWithQrCode, batchDir);
+    const zipFilePath = path.join(batchDir, "tickets.zip");
     await zipFiles(pdfFiles, zipFilePath);
 
     // Send the email with the ZIP file attachment
@@ -212,13 +218,18 @@ const createBulkTicketForEvent = async (req, res) => {
       message: "Tickets have been sent to your email.",
       emailResponse,
     });
-
-    // Clean up
-    pdfFiles.forEach(({ path }) => fs.unlinkSync(path));
-    fs.unlinkSync(zipFilePath);
   } catch (error) {
     console.error("Create Event Bulk Ticket Error:", error.message);
     return sendResponse(res, 500, true, "Internal Server Error");
+  } finally {
+    // Clean up the batch PDFs and zip, also when something failed
+    if (batchDir) {
+      try {
+        fs.rmSync(batchDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        console.error("Bulk ticket cleanup failed:", cleanupError.message);
+      }
+    }
   }
 };
 

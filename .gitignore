@@ -29,3 +29,5 @@ yarn-error.log*
 
 .env
 *.pem
+# Local notes for Claude (not committed)
+localdocs

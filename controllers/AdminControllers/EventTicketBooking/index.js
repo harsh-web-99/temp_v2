@@ -56,6 +56,7 @@ import {
   findOneEventBookingsDataService,
   getEventBookingsDataService,
   sendBookingSmsMailtoUser,
+  sortBookingsByLatest,
   getPaginatedEventBookingsData,
   countEventBookings,
   fetchAndFormatEventTransactionData,
@@ -73,7 +74,7 @@ import {
   findOneVenueDataService,
   getVenueDataService,
 } from "../../../services/VenueServices.js";
-import { sendCancelEventBookingSms } from "../../../helpers/SmsFunctions.js";
+import { sendCancelEventBookingNotification } from "../../../helpers/Notifications.js";
 import { getCheckInDataService } from "../../../services/CheckInServices.js";
 import { findOnePromocodeDataService } from "../../../services/PromocodeServices.js";
 import { findOneScannerUserDataService } from "../../../services/ScannerUserServices.js";
@@ -352,13 +353,18 @@ const cancelEventTicket = async (req, res) => {
 
     const { EventName } = EventData;
 
+    // Read before TicketQuantity is zeroed below, so the tickets are returned.
+    // A Failed booking's tickets were already returned by the payment failure callback.
+    const TicketId = EventBookingData._doc.EventTicket_id;
+    const TicketQuantity =
+      currentBookingStatus == BookingStatus.Failed
+        ? 0
+        : EventBookingData._doc.TicketQuantity;
+
     EventBookingData.TotalAmount = 0;
     EventBookingData.TicketQuantity = 0;
     EventBookingData.status = BookingStatus.Cancelled;
     await EventBookingData.save();
-
-    const TicketId = EventBookingData._doc.EventTicket_id;
-    const TicketQuantity = EventBookingData._doc.TicketQuantity;
 
     const existingTicket = await EventTickets.findOne({
       _id: TicketId,
@@ -376,7 +382,13 @@ const cancelEventTicket = async (req, res) => {
 
     await CheckIn.deleteMany({ Booking_id: booking_id });
 
-    sendCancelEventBookingSms(`91${PhoneNumber}`, EventName, booking_id);
+    console.log(
+      currentBookingStatus == BookingStatus.Failed
+        ? `Booking ${booking_id} cancelled, no tickets returned (payment had failed, already returned)`
+        : `Booking ${booking_id} cancelled, returned ${TicketQuantity} ticket(s)`,
+    );
+
+    sendCancelEventBookingNotification(PhoneNumber, EventName, booking_id);
 
     return sendResponse(res, 200, false, "Booking Cancelled successfully");
   } catch (error) {
@@ -485,6 +497,8 @@ const getPromoterLatestBookings = async (req, res) => {
     let EventVenue = [];
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id } = booking;
@@ -579,7 +593,7 @@ const getPromoterLatestBookings = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     const EventNamesSet = new Set();
     EventNamesArray.forEach((EventNamesData) => {
@@ -1477,7 +1491,7 @@ const getPromoterLatestBookingsForSuperAdminOrganizer = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     if (event_id) {
       const filterQuery = {
@@ -1718,6 +1732,8 @@ const downloadPromoterLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventDateTime_id, EventTicket_id, event_id } = booking;
@@ -1830,7 +1846,7 @@ const downloadPromoterLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();
@@ -2184,7 +2200,7 @@ const getOnlineLatestBookingsForSuperAdminOrganizer = async (req, res) => {
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     if (event_id) {
       const filterQuery = {
@@ -2424,6 +2440,8 @@ const downloadExcelOnlineLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id } = booking;
@@ -2551,7 +2569,7 @@ const downloadExcelOnlineLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();
@@ -3113,6 +3131,8 @@ const downloadExcelAllLatestBookingsForSuperAdminOrganizer = async (
     }
 
     // Format booking data
+    sortBookingsByLatest(bookingData);
+
     const formattedBookingData = await Promise.all(
       bookingData.map(async (booking) => {
         const { EventTicket_id, event_id, BookingSource } = booking;
@@ -3254,7 +3274,7 @@ const downloadExcelAllLatestBookingsForSuperAdminOrganizer = async (
       }),
     );
 
-    const latestBookingData = formattedBookingData.reverse();
+    const latestBookingData = formattedBookingData;
 
     // Generate and send Excel file
     const workbook = new ExcelJS.Workbook();

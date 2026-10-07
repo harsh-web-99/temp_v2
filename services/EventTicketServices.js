@@ -97,10 +97,14 @@ const updateEventTicketDataService = async (filterquery, updateQuery) => {
   }
 };
 
+// Server uses the system Chromium; PUPPETEER_EXECUTABLE_PATH can override it (e.g. local testing)
+const getChromiumExecutablePath = () =>
+  process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium-browser";
+
 const generatePDFWithPuppeteer = async (ticket, filePath) => {
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: "/usr/bin/chromium-browser",
+    executablePath: getChromiumExecutablePath(),
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
@@ -126,18 +130,104 @@ const generatePDFWithPuppeteer = async (ticket, filePath) => {
   }
 };
 
+// Bulk tickets: one browser for the whole batch, printing a few tickets at a time.
+// Starting a browser per ticket made 50 tickets take minutes and some PDFs timed out.
+const BULK_PDF_CONCURRENCY = 5;
+const BULK_PDF_ATTEMPTS = 2;
+
+// The logo is in Assets/, so embed it instead of every page downloading it
+const embedLocalAsset = (url) => {
+  try {
+    const fileName = path.basename(new URL(url).pathname);
+    const data = fs.readFileSync(path.join(process.cwd(), "Assets", fileName));
+    return `data:image/png;base64,${data.toString("base64")}`;
+  } catch (error) {
+    return url;
+  }
+};
+
+// tickets: [{ ...ticket, qrCodeUrl, logoUrl }]. Returns [{ path, name }] in the same order.
+const generateBulkTicketPDFs = async (tickets, outDir) => {
+  const templatePath = path.join(process.cwd(), "templates", "ticket.ejs");
+  const embeddedLogos = new Map();
+  const results = new Array(tickets.length);
+  let nextIndex = 0;
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    executablePath: getChromiumExecutablePath(),
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  const renderTicket = async (page, ticket, filePath) => {
+    if (!embeddedLogos.has(ticket.logoUrl)) {
+      embeddedLogos.set(ticket.logoUrl, embedLocalAsset(ticket.logoUrl));
+    }
+    const html = await ejs.renderFile(templatePath, {
+      ticket: { ...ticket, logoUrl: embeddedLogos.get(ticket.logoUrl) },
+    });
+    await page.setContent(html, { waitUntil: "load", timeout: 30000 });
+    await page.waitForSelector(".ticket-container", { timeout: 30000 });
+    await page.pdf({ path: filePath, format: "A4", printBackground: true });
+  };
+
+  const worker = async () => {
+    let page = await browser.newPage();
+    try {
+      while (nextIndex < tickets.length) {
+        const index = nextIndex++;
+        const ticket = tickets[index];
+        const name = `${ticket.Booking_id}.pdf`;
+        const filePath = path.join(outDir, name);
+
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await renderTicket(page, ticket, filePath);
+            break;
+          } catch (error) {
+            console.error(
+              `Bulk ticket PDF ${ticket.Booking_id} failed (attempt ${attempt}):`,
+              error.message
+            );
+            if (attempt >= BULK_PDF_ATTEMPTS) {
+              nextIndex = tickets.length; // stop the other workers
+              throw error;
+            }
+            await page.close().catch(() => {});
+            page = await browser.newPage();
+          }
+        }
+        results[index] = { path: filePath, name };
+      }
+    } finally {
+      await page.close().catch(() => {});
+    }
+  };
+
+  try {
+    const workerCount = Math.min(BULK_PDF_CONCURRENCY, tickets.length);
+    await Promise.all(Array.from({ length: workerCount }, worker));
+    return results;
+  } finally {
+    await browser.close();
+  }
+};
+
 const generateQRCode = async (qrObj) => {
   const qrString = JSON.stringify(qrObj);
   return QRCode.toDataURL(qrString);
 };
 
 const zipFiles = async (files, zipFilePath) => {
-  const archive = archiver("zip", { zlib: { level: 9 } });
+  // PDFs are already compressed, so a low level is much faster for the same size
+  const archive = archiver("zip", { zlib: { level: 1 } });
   const output = fs.createWriteStream(zipFilePath);
 
   return new Promise((resolve, reject) => {
     output.on("close", resolve);
     archive.on("error", reject);
+    // A missing ticket PDF must fail the zip instead of being skipped silently
+    archive.on("warning", reject);
 
     archive.pipe(output);
     files.forEach(({ path: filePath, name }) => {
@@ -220,6 +310,7 @@ export {
   deleteEventTicketByIdService,
   updateEventTicketDataService,
   generatePDFWithPuppeteer,
+  generateBulkTicketPDFs,
   generateQRCode,
   zipFiles,
   sendEmailWithAttachment,

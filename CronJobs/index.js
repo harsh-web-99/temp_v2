@@ -199,29 +199,34 @@ const releasePendingBookingTickets = async () => {
 
     await Promise.all(
       InProcessBookingData.map(async (bookingData) => {
-        console.log("Bookings Found for release");
-
-        const QrCodeimagePath = bookingData._doc.Qr_image_path;
-        const TicketId = bookingData._doc.EventTicket_id;
-        const TicketQuantity = bookingData._doc.TicketQuantity;
-
-        const existingTicket = await EventTickets.findOne({
-          _id: TicketId,
+        // Delete only if still InProcess, so a booking paid in the meantime is kept
+        // and each booking's tickets are released exactly once
+        const releasedBooking = await EventBookings.findOneAndDelete({
+          _id: bookingData._doc._id,
+          status: BookingStatus.InProcess,
         });
-
-        if (!existingTicket) {
-          console.log("Ticket Not Found");
+        if (!releasedBooking) {
+          console.log(
+            `Booking ${bookingData._doc.Booking_id} not released, it is no longer InProcess`
+          );
+          return;
         }
 
-        const updatedBookedQuantity =
-          existingTicket.BookedQuantity - TicketQuantity;
+        await EventTickets.updateOne(
+          { _id: releasedBooking.EventTicket_id },
+          { $inc: { BookedQuantity: -releasedBooking.TicketQuantity } }
+        );
+        console.log(
+          `Released unpaid booking ${releasedBooking.Booking_id}, returned ${releasedBooking.TicketQuantity} ticket(s)`
+        );
 
-        existingTicket.BookedQuantity = updatedBookedQuantity;
-        await existingTicket.save();
-
-        await fs.unlink(path.join(QrCodeimagePath));
-
-        await EventBookings.deleteOne({ _id: bookingData._doc._id });
+        if (releasedBooking.Qr_image_path) {
+          await fs
+            .unlink(path.join(releasedBooking.Qr_image_path))
+            .catch((err) =>
+              console.error("Error deleting QR code image:", err.message)
+            );
+        }
       })
     );
 

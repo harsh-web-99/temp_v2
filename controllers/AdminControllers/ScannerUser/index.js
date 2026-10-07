@@ -53,7 +53,7 @@ import {
   getCheckInDataService,
 } from "../../../services/CheckInServices.js";
 import { findOneEventBulkTicketsDataService } from "../../../services/EventBulkTicketServices.js";
-import { sendTicketRedeemptionSms } from "../../../helpers/SmsFunctions.js";
+import { sendTicketRedeemptionNotification } from "../../../helpers/Notifications.js";
 import { findOneEventTicketDataService } from "../../../services/EventTicketServices.js";
 import { findOneVenueDataService } from "../../../services/VenueServices.js";
 
@@ -900,8 +900,8 @@ const scanQrCode = async (req, res) => {
 
             respObj.Status = "Success";
 
-            sendTicketRedeemptionSms(
-              `91${CustomerPhonenumber}`,
+            sendTicketRedeemptionNotification(
+              CustomerPhonenumber,
               EventName,
               Booking_id
             );
@@ -1014,8 +1014,8 @@ const scanQrCode = async (req, res) => {
 
               await createBulkCheckInService(bulkCheckInArray);
 
-              sendTicketRedeemptionSms(
-                `91${CustomerPhonenumber}`,
+              sendTicketRedeemptionNotification(
+                CustomerPhonenumber,
                 EventName,
                 Booking_id
               );
@@ -1176,8 +1176,8 @@ const scanQrCode = async (req, res) => {
 
             await createBulkCheckInService(bulkCheckInArray);
 
-            sendTicketRedeemptionSms(
-              `91${CustomerPhonenumber}`,
+            sendTicketRedeemptionNotification(
+              CustomerPhonenumber,
               EventName,
               Booking_id
             );
