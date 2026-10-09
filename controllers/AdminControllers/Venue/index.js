@@ -29,7 +29,7 @@ import {
 import { getAsiaCalcuttaCurrentDateTimeinIsoFormat } from "../../../helpers/DateTime.js";
 import {
   sanitizeFileName,
-  isValidGoogleMapsIframe,
+  getGoogleMapsEmbedIframe,
 } from "../../../helpers/commonFunctions.js";
 
 const createVenue = async (req, res) => {
@@ -127,10 +127,11 @@ const createVenue = async (req, res) => {
         Priority,
       };
 
-      const isMapLocationValid = isValidGoogleMapsIframe(Map_Location);
+      // Store a clean iframe built from the Google Maps link
+      const mapIframe = getGoogleMapsEmbedIframe(Map_Location);
 
-      if (isMapLocationValid) {
-        venueObj.Map_Location = Map_Location;
+      if (mapIframe) {
+        venueObj.Map_Location = mapIframe;
       } else {
         return sendResponse(res, 400, true, "Invalid Google Maps iframe URL");
       }
@@ -281,10 +282,11 @@ const updateVenueData = async (req, res) => {
     }
     if (CityIsoCode) VenueData.CityIsoCode = CityIsoCode;
     if (Map_Location) {
-      const isMapLocationValid = isValidGoogleMapsIframe(Map_Location);
+      // Store a clean iframe built from the Google Maps link
+      const mapIframe = getGoogleMapsEmbedIframe(Map_Location);
 
-      if (isMapLocationValid) {
-        VenueData.Map_Location = Map_Location;
+      if (mapIframe) {
+        VenueData.Map_Location = mapIframe;
       } else {
         return sendResponse(res, 400, true, "Invalid Google Maps iframe URL");
       }

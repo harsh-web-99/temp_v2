@@ -50,12 +50,29 @@ const isValidYouTubeUrl = (url) => {
   return youtubeRegex.test(url);
 };
 
-const isValidGoogleMapsIframe = (iframeString) => {
-  const regex =
-    /^<iframe src="https:\/\/www\.google\.com\/maps\/embed\?pb=.+?" width="\d+" height="\d+" style="border:0;" allowfullscreen="" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"><\/iframe>$/;
+// Google Maps embed link: only URL-safe characters, so nothing can break out of the src attribute
+const googleMapsEmbedUrlRegex =
+  /^https:\/\/www\.google\.com\/maps\/embed\?pb=[A-Za-z0-9!%._~:+=&,;@*#-]+$/;
 
-  return regex.test(iframeString);
+// Accepts the full iframe from Google Maps (Share > Embed a map) or just the
+// embed link, and returns a clean standard iframe to store. Returns null if
+// it is not a Google Maps embed. Width/height/referrerpolicy differences are ignored.
+const getGoogleMapsEmbedIframe = (input) => {
+  if (typeof input !== "string") return null;
+  const value = input.trim();
+
+  const iframeMatch = value.match(
+    /^<iframe\b[^>]*?\ssrc\s*=\s*"([^"]*)"[^>]*>\s*<\/iframe>$/i
+  );
+  const url = (iframeMatch ? iframeMatch[1] : value).trim();
+
+  if (!googleMapsEmbedUrlRegex.test(url)) return null;
+
+  return `<iframe src="${url}" width="600" height="450" style="border:0;" allowfullscreen="" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
 };
+
+const isValidGoogleMapsIframe = (iframeString) =>
+  getGoogleMapsEmbedIframe(iframeString) !== null;
 
 export {
   generateRandomAlphaNumeric,
@@ -66,4 +83,5 @@ export {
   saveQRCodeToServer,
   isValidYouTubeUrl,
   isValidGoogleMapsIframe,
+  getGoogleMapsEmbedIframe,
 };
