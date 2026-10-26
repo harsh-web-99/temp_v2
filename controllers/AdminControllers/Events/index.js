@@ -220,8 +220,9 @@ const compareEventsByCreation = (a, b) =>
   getTimeOrZero(a.FilterationDateTime) - getTimeOrZero(b.FilterationDateTime) ||
   String(a._id).localeCompare(String(b._id));
 
-// Upcoming events first, then past events, each by date. Ties are broken by
-// creation time and id, so every refresh and every page returns the same order.
+// Upcoming events first, then past events, each with the latest date first.
+// Ties: most recently created first, then id, so every refresh and every page
+// returns the same order.
 const sortEventsByBestDate = (events, eventDateMap) =>
   events.sort((a, b) => {
     const dateMapA = eventDateMap[a._id];
@@ -234,7 +235,7 @@ const sortEventsByBestDate = (events, eventDateMap) =>
     const dateA = dateMapA ? getTimeOrZero(dateMapA.date) : 0;
     const dateB = dateMapB ? getTimeOrZero(dateMapB.date) : 0;
 
-    return dateA - dateB || compareEventsByCreation(a, b);
+    return dateB - dateA || compareEventsByCreation(b, a);
   });
 
 // Lists without pagination: newest created first, then by id
