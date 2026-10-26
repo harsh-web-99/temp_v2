@@ -4,6 +4,7 @@ import {
   Employee,
   Promoter,
   Event,
+  EventTickets,
 } from "../../../models/AllModels.js";
 import {
   validateSuperAdminEventCreation,
@@ -2722,6 +2723,18 @@ const addPromoterToEvent = async (req, res) => {
     isEventExists.EventPromoter = updatedPromoterIdsArrayForServiceFunction;
 
     await isEventExists.save();
+
+    // Promoters removed from the event are also removed from its tickets,
+    // so the tickets can still be edited (they may only list event promoters)
+    const ticketsUpdate = await EventTickets.updateMany(
+      { Event_id: event_id },
+      { $pull: { Promoters: { promoter_id: { $nin: promoterIds } } } }
+    );
+    if (ticketsUpdate.modifiedCount > 0) {
+      console.log(
+        `Removed unassigned promoters from ${ticketsUpdate.modifiedCount} ticket(s) of event ${event_id}`
+      );
+    }
 
     return sendResponse(
       res,
