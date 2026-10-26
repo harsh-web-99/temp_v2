@@ -1518,6 +1518,7 @@ async function validateEventTicketUpdate(data) {
       TicketVisiblity.Promoters,
       TicketVisiblity.Self
     ),
+    Name: Joi.string().min(1).max(50),
     Description: Joi.string().min(3).max(10000),
     Quantity: Joi.number().integer().positive(),
     Price: Joi.number().min(0),

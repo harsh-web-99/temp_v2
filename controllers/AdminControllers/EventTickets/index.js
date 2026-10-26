@@ -646,6 +646,7 @@ const updateEventTicketbyId = async (req, res) => {
       Event_id,
       eventTicket_id,
       EventTicketVisibility,
+      Name,
       Description,
       Quantity,
       Price,
@@ -690,6 +691,44 @@ const updateEventTicketbyId = async (req, res) => {
 
     if (!isEventTicketExists) {
       return sendResponse(res, 404, true, "Event Ticket not found");
+    }
+
+    // Name can only be changed while the ticket is disabled, and must stay unique for the date
+    let updatedTicketName;
+    if (Name !== undefined) {
+      const trimmedTicketName = Name.trim();
+      if (!trimmedTicketName) {
+        return sendResponse(res, 400, true, "Ticket Name cannot be empty");
+      }
+      if (trimmedTicketName !== isEventTicketExists.Name) {
+        if (isEventTicketExists.EventTicketStatus != TicketStatus.Disable) {
+          return sendResponse(
+            res,
+            409,
+            true,
+            "Ticket Name can only be changed when the ticket is disabled"
+          );
+        }
+        const escapedTicketName = trimmedTicketName.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          "\\$&"
+        );
+        const ticketsWithSameName = await getEventTicketDataService({
+          _id: { $ne: eventTicket_id },
+          Event_id: Event_id,
+          EventDateTime_id: isEventTicketExists.EventDateTime_id || null,
+          Name: new RegExp(`^${escapedTicketName}$`, "i"),
+        });
+        if (ticketsWithSameName.length > 0) {
+          return sendResponse(
+            res,
+            409,
+            true,
+            `A ticket with the name "${trimmedTicketName}" already exists`
+          );
+        }
+        updatedTicketName = trimmedTicketName;
+      }
     }
 
     const EventTicketCurrentQuantity = isEventTicketExists.Quantity;
@@ -741,9 +780,11 @@ const updateEventTicketbyId = async (req, res) => {
     }
 
     // Update the other fields if provided
+    if (updatedTicketName) isEventTicketExists.Name = updatedTicketName;
     if (Description) isEventTicketExists.Description = Description;
     if (Quantity) isEventTicketExists.Quantity = Quantity;
-    if (Price) isEventTicketExists.Price = Price;
+    // 0 is a valid price (free tickets)
+    if (Price !== undefined && Price !== null) isEventTicketExists.Price = Price;
     if (BookingMaxLimit) isEventTicketExists.BookingMaxLimit = BookingMaxLimit;
 
     // Save the updated event ticket
