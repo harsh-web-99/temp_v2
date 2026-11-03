@@ -30,6 +30,20 @@ const sendWhatsappTemplate = (
   // Only the last 4 digits are logged
   const maskedNumber = `******${String(mobileNumber).slice(-4)}`;
 
+  const template = {
+    name: templateName,
+    languageCode: "en",
+    bodyValues: bodyValues.map(toTemplateValue),
+  };
+  if (buttonValues) template.buttonValues = buttonValues;
+
+  const payload = JSON.stringify({
+    countryCode: "+91",
+    phoneNumber: String(mobileNumber),
+    type: "Template",
+    template,
+  });
+
   const options = {
     method: "POST",
     hostname: "api.interakt.ai",
@@ -38,6 +52,8 @@ const sendWhatsappTemplate = (
     headers: {
       Authorization: `Basic ${process.env.INTERAKT_API_KEY}`,
       "content-type": "application/json",
+      // Interakt rejects bodies sent without a length (chunked) as "Invalid Request"
+      "content-length": Buffer.byteLength(payload),
     },
   };
 
@@ -62,20 +78,6 @@ const sendWhatsappTemplate = (
       `Interakt WhatsApp ${templateName} to ${maskedNumber} request failed:`,
       e.message,
     );
-  });
-
-  const template = {
-    name: templateName,
-    languageCode: "en",
-    bodyValues: bodyValues.map(toTemplateValue),
-  };
-  if (buttonValues) template.buttonValues = buttonValues;
-
-  const payload = JSON.stringify({
-    countryCode: "+91",
-    phoneNumber: String(mobileNumber),
-    type: "Template",
-    template,
   });
 
   req.write(payload);
